@@ -1,0 +1,25 @@
+node_modules
+.next
+.env
+.env.local
+.env.production
+dist
+coverage
+*.log
+
+
+cd D:\Projetosdev\buscavagas\apps\spxroutescam\romaneio-panel
+
+# inicializar o repositório do zero teste
+git init
+git add .
+git commit -m "chore: init romaneio-panel"
+
+# garantir que a branch é main
+git branch -M main
+
+# conectar ao repo remoto (substitui pelo seu link do GitHub)
+git remote add origin https://github.com/davizins/spxroutescam.git
+
+# enviar tudo pro GitHub
+git push -u origin main
