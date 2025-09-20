@@ -12,12 +12,19 @@ function LoginInner() {
   const error = sp.get("error");
 
   const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const res = await signIn("credentials", {
-      email, password, redirect: false, callbackUrl: "/",
-    });
-    if (res?.ok) router.push(res.url || "/");
-    else alert("Login inválido");
+  e.preventDefault();
+  const res = await signIn("credentials", {
+    email,
+    password,
+    redirect: false,
+    callbackUrl: "/",
+  });
+
+  if (res?.error) {
+    alert("Login inválido");
+    return;
+  }
+  router.push(res?.url ?? "/");
   };
 
   return (
