@@ -7,17 +7,14 @@ import { useSearchParams, useRouter } from "next/navigation";
 function LoginInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const sp = useSearchParams();
+  const sp = useSearchParams(); // OK dentro de <Suspense>
   const router = useRouter();
   const error = sp.get("error");
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const res = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-      callbackUrl: "/",
+      email, password, redirect: false, callbackUrl: "/",
     });
     if (res?.ok) router.push(res.url || "/");
     else alert("Login inválido");
@@ -36,22 +33,14 @@ function LoginInner() {
         )}
 
         <label className="mt-4 block text-sm">E-mail</label>
-        <input
-          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          type="email"
-          required
-        />
+        <input className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+               value={email} onChange={(e) => setEmail(e.target.value)}
+               type="email" required />
 
         <label className="mt-3 block text-sm">Senha</label>
-        <input
-          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          type="password"
-          required
-        />
+        <input className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+               value={password} onChange={(e) => setPassword(e.target.value)}
+               type="password" required />
 
         <button type="submit" className="mt-5 w-full rounded-xl bg-zinc-900 px-3 py-2 text-sm text-white hover:opacity-90">
           Entrar
@@ -62,5 +51,9 @@ function LoginInner() {
 }
 
 export default function LoginClient() {
-  return <Suspense fallback={<div className="p-6 text-center">Carregando…</div>}><LoginInner /></Suspense>;
+  return (
+    <Suspense fallback={<div className="p-6 text-center">Carregando…</div>}>
+      <LoginInner />
+    </Suspense>
+  );
 }
