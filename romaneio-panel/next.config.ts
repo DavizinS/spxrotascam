@@ -1,7 +1,9 @@
+// next.config.ts
+import path from "path";
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  /* config options here */
+const config: NextConfig = {
+  outputFileTracingRoot: path.join(__dirname, "../../.."),
 };
 
-export default nextConfig;
+export default config;

@@ -1,13 +1,16 @@
 // app/login/page.tsx
 "use client";
-import { useState } from "react";
+
+import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
 
-export default function LoginPage() {
+export const dynamic = "force-dynamic"; // evita problemas de prerender em /login
+
+function LoginInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const sp = useSearchParams();
+  const sp = useSearchParams();              // ✅ agora dentro de <Suspense>
   const router = useRouter();
   const error = sp.get("error");
 
@@ -42,16 +45,18 @@ export default function LoginPage() {
         <input
           className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
           value={email}
-          onChange={(e)=>setEmail(e.target.value)}
-          type="email" required
+          onChange={(e) => setEmail(e.target.value)}
+          type="email"
+          required
         />
 
         <label className="mt-3 block text-sm">Senha</label>
         <input
           className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
           value={password}
-          onChange={(e)=>setPassword(e.target.value)}
-          type="password" required
+          onChange={(e) => setPassword(e.target.value)}
+          type="password"
+          required
         />
 
         <button
@@ -62,5 +67,13 @@ export default function LoginPage() {
         </button>
       </form>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-center">Carregando…</div>}>
+      <LoginInner />
+    </Suspense>
   );
 }
