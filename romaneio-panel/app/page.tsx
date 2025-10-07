@@ -4,9 +4,17 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 
 /* =========================
-   Tipos
+          Tipos
 ========================= */
 type AddressItem = { stop?: number; address: string };
+type SimpleUser = { id: string; name: string; modal: string };
+
+const [userId, setUserId] = useState<string>(() => localStorage.getItem("romaneio:userId") || "");
+const [currentUser, setCurrentUser] = useState<SimpleUser | null>(null);
+
+useEffect(() => {
+  localStorage.setItem("romaneio:userId", userId || "");
+}, [userId]);
 
 type Rota = {
   id: string;
@@ -178,6 +186,38 @@ function idbOpen(): Promise<IDBDatabase | null> {
     req.onerror = () => rej(req.error);
   });
 }
+
+async function fetchUserById(id: string) {
+  const res = await fetch(`/api/user/${encodeURIComponent(id)}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(res.status === 404 ? "Usuário não encontrado" : "Falha ao buscar usuário");
+  const u = (await res.json()) as SimpleUser;
+  setCurrentUser(u);
+  return u;
+}
+
+async function handleLoadUser() {
+  try {
+    if (!userId.trim()) throw new Error("Informe o ID do usuário");
+    await fetchUserById(userId.trim());
+  } catch (e: any) {
+    setCurrentUser(null);
+    alert(e.message || "Erro ao carregar usuário");
+  }
+}
+
+async function copyRoute(r: Rota) {
+  try {
+    const u = currentUser ?? (userId ? await fetchUserById(userId.trim()) : null);
+    if (!u) throw new Error("Carregue o usuário (ID) antes");
+
+    const text = `${u.id}\n${(u.name || "").toUpperCase()}\n${(u.modal || "").toUpperCase()}\n${r.id}`;
+    await navigator.clipboard.writeText(text);
+    alert("Copiado!");
+  } catch (e: any) {
+    alert(e.message || "Não foi possível copiar");
+  }
+}
+
 async function idbSetFile(file: File) {
   const db = await idbOpen();
   if (!db) return;
@@ -617,6 +657,28 @@ export default function RomaneioPage() {
                 Exportar CSV
               </button>
 
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="ID do usuário"
+                  value={userId}
+                  onChange={(e) => setUserId(e.target.value)}
+                  className="w-40 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm"
+                  title="ID do motorista/usuário (coluna id)"
+                />
+                <button
+                  onClick={handleLoadUser}
+                  className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
+                >
+                  Carregar
+                </button>
+                {currentUser && (
+                  <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs">
+                    {currentUser.name || "—"} · {(currentUser.modal || "—")}
+                  </span>
+                )}
+              </div>
+
               <button
                 onClick={() => {
                   setRotas([]);
@@ -769,6 +831,16 @@ export default function RomaneioPage() {
                 {selo}
               </div>
 
+              <div className="mt-2 flex justify-end">
+                <button
+                  onClick={(e) => { e.stopPropagation(); copyRoute(r); }}
+                  className="rounded-md bg-black/25 px-2 py-1 text-[11px] hover:bg-black/35"
+                  title="Copiar ID, NOME, MODAL e ROTA"
+                >
+                  Pegar rota
+                </button>
+              </div>
+              
               <div className="text-[13px] font-bold leading-tight">Rota {r.id}</div>
               <div className="mt-0.5 truncate text-[11px] opacity-90">
                 {r.neighborhoodSample || "—"}
