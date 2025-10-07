@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 
 function LoginInner() {
   const [email, setEmail] = useState("");
@@ -10,6 +11,8 @@ function LoginInner() {
   const sp = useSearchParams(); // OK dentro de <Suspense>
   const router = useRouter();
   const error = sp.get("error");
+  const { data: session, status } = useSession();
+
 
   const onSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
