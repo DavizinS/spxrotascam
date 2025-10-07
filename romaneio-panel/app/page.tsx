@@ -830,7 +830,6 @@ export default function RomaneioPage() {
               <div className="absolute right-2 top-2 rounded-full bg-black/25 px-2 py-0.5 text-[10px]">
                 {selo}
               </div>
-
               <div className="mt-2 flex justify-end">
                 <button
                   onClick={(e) => { e.stopPropagation(); copyRoute(r); }}
@@ -840,7 +839,6 @@ export default function RomaneioPage() {
                   Pegar rota
                 </button>
               </div>
-              
               <div className="text-[13px] font-bold leading-tight">Rota {r.id}</div>
               <div className="mt-0.5 truncate text-[11px] opacity-90">
                 {r.neighborhoodSample || "—"}
