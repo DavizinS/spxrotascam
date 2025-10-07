@@ -241,7 +241,7 @@ export default function HomeClient() {
     if (!currentUser) { alert("Faça login para pegar a rota"); return; }
     const text = `${currentUser.id}
   ${(currentUser.name || "").toUpperCase()}
-  ${(currentUser.modal || "").toUpperCase()}
+  ${(currentUser.modal || "PASSEIO").toUpperCase()}
   ${r.id}`;
     await navigator.clipboard.writeText(text);
     alert("Copiado!");
@@ -253,7 +253,7 @@ export default function HomeClient() {
       setCurrentUser({
         id: String(u.id ?? ""),
         name: String(u.name ?? ""),
-        modal: String(u.modal ?? u.image ?? ""),
+        modal: "PASSEIO",
       });
     } else {
       setCurrentUser(null);

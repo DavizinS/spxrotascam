@@ -40,7 +40,7 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        (token as any).modal = (user as any).image ?? null; // “image” aqui é o MODAL
+        (token as any).modal = (user as any).image ?? null;
       }
       return token;
     },
