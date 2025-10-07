@@ -2,6 +2,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef } from "react";
+import { useSession } from "next-auth/react";
 import * as XLSX from "xlsx";
 
 /* =========================
@@ -9,6 +10,9 @@ import * as XLSX from "xlsx";
 ========================= */
 type AddressItem = { stop?: number; address: string };
 type SimpleUser = { id: string; name: string; modal: string };
+
+const { data: session, status } = useSession();
+const [currentUser, setCurrentUser] = useState<{id: string; name: string; modal: string} | null>(null);
 
 type Rota = {
   id: string;
