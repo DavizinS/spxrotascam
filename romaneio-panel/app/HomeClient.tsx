@@ -238,18 +238,15 @@ export default function HomeClient() {
   const { data: session, status } = useSession();
   const [currentUser, setCurrentUser] = useState<SimpleUser | null>(null);
   const copyRoute = async (r: Rota) => {
-    try {
-      if (!currentUser) throw new Error("Faça login para pegar a rota");
-      const text = `${currentUser.id}
+    if (!currentUser) { alert("Faça login para pegar a rota"); return; }
+    const text = `${currentUser.id}
   ${(currentUser.name || "").toUpperCase()}
   ${(currentUser.modal || "").toUpperCase()}
   ${r.id}`;
-      await navigator.clipboard.writeText(text);
-      alert("Copiado!");
-    } catch (e: any) {
-      alert(e.message || "Não foi possível copiar");
-    }
+    await navigator.clipboard.writeText(text);
+    alert("Copiado!");
   };
+
   useEffect(() => {
     if (status === "authenticated" && session?.user) {
       const u = session.user as any;

@@ -14,24 +14,25 @@ export const authOptions: NextAuthOptions = {
       async authorize(creds) {
         if (!creds?.email || !creds?.password) return null;
 
-        // ❌ sem "select" com image/modal
-        const user = await prisma.user.findUnique({
-          where: { email: creds.email },
-        });
+        // sem select, pega todos os campos do modelo do Prisma
+        const user = await prisma.user.findUnique({ where: { email: creds.email } });
         if (!user || !user.password) return null;
 
         const ok = await bcrypt.compare(creds.password, user.password);
         if (!ok) return null;
 
-        // pegue o modal de onde existir: 'modal' (se tiver no schema) ou 'image' (se você estiver reaproveitando)
-        const modal = (user as any).modal ?? (user as any).image ?? null;
+        // pega 'modal' OU 'image' do modelo (qual você tiver no schema)
+        const modalVal =
+          (user as any).modal ??
+          (user as any).image ??
+          null;
 
-        // Devolvo no campo 'image' do NextAuth (só para carregar pelo token)
+        // devolve 'image' só para carregar via callback (usamos como MODAL)
         return {
           id: String(user.id),
           name: user.name ?? user.email ?? "User",
           email: user.email ?? undefined,
-          image: modal ?? undefined,
+          image: modalVal ?? undefined,
         } as any;
       },
     }),
@@ -39,7 +40,7 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        (token as any).modal = (user as any).image ?? null; // o "modal" vem no slot image
+        (token as any).modal = (user as any).image ?? null; // “image” aqui é o MODAL
       }
       return token;
     },
@@ -52,3 +53,4 @@ export const authOptions: NextAuthOptions = {
 };
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
