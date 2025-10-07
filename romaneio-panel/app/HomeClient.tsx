@@ -1,3 +1,4 @@
+// app/HomeClient.tsx
 "use client";
 
 import { useMemo, useState, useEffect, useRef } from "react";
@@ -8,13 +9,6 @@ import * as XLSX from "xlsx";
 ========================= */
 type AddressItem = { stop?: number; address: string };
 type SimpleUser = { id: string; name: string; modal: string };
-
-const [userId, setUserId] = useState<string>(() => localStorage.getItem("romaneio:userId") || "");
-const [currentUser, setCurrentUser] = useState<SimpleUser | null>(null);
-
-useEffect(() => {
-  localStorage.setItem("romaneio:userId", userId || "");
-}, [userId]);
 
 type Rota = {
   id: string;
@@ -111,14 +105,10 @@ const mmStr = (m: number | null) =>
 
 const colorByBand = (band: "green" | "yellow" | "red" | "none") => {
   switch (band) {
-    case "green":
-      return "bg-green-600";
-    case "yellow":
-      return "bg-orange-500";
-    case "red":
-      return "bg-red-600";
-    default:
-      return "bg-zinc-500";
+    case "green": return "bg-green-600";
+    case "yellow": return "bg-orange-500";
+    case "red": return "bg-red-600";
+    default: return "bg-zinc-500";
   }
 };
 
@@ -146,13 +136,13 @@ const guessMap = (cols: string[]) => {
     return undefined;
   };
   return {
-    StopIndex: pick(["stop", "stopnumber", "stop#", "stops", "parada", "sequencia", "seq", "ordem"], 0),
-    Address: pick(["destinationaddress", "address", "endereco", "destino"], 1),
-    Neighborhood: pick(["neighborhood", "bairro"], 3),
-    DeliveryTime: pick(["deliverytime", "delivery", "tempoentrega", "leadtime"], 6),
-    LocationType: pick(["locationtype", "tipo", "tipolocal"], 7),
-    PlannedAT: pick(["plannedat", "planned"], 8),
-    CorridorCage: pick(["corridorcage", "corridor", "cage", "rota"], 9),
+    StopIndex: pick(["stop","stopnumber","stop#","stops","parada","sequencia","seq","ordem"], 0),
+    Address:   pick(["destinationaddress","address","endereco","destino"], 1),
+    Neighborhood: pick(["neighborhood","bairro"], 3),
+    DeliveryTime: pick(["deliverytime","delivery","tempoentrega","leadtime"], 6),
+    LocationType: pick(["locationtype","tipo","tipolocal"], 7),
+    PlannedAT: pick(["plannedat","planned"], 8),
+    CorridorCage: pick(["corridorcage","corridor","cage","rota"], 9),
   } as const;
 };
 
@@ -175,7 +165,7 @@ const timeAgo = (ts?: number) => {
 };
 
 /* =========================
-   IndexedDB helpers (arquivo bruto)
+   IndexedDB helpers
 ========================= */
 function idbOpen(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
@@ -186,38 +176,6 @@ function idbOpen(): Promise<IDBDatabase | null> {
     req.onerror = () => rej(req.error);
   });
 }
-
-async function fetchUserById(id: string) {
-  const res = await fetch(`/api/user/${encodeURIComponent(id)}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(res.status === 404 ? "Usuário não encontrado" : "Falha ao buscar usuário");
-  const u = (await res.json()) as SimpleUser;
-  setCurrentUser(u);
-  return u;
-}
-
-async function handleLoadUser() {
-  try {
-    if (!userId.trim()) throw new Error("Informe o ID do usuário");
-    await fetchUserById(userId.trim());
-  } catch (e: any) {
-    setCurrentUser(null);
-    alert(e.message || "Erro ao carregar usuário");
-  }
-}
-
-async function copyRoute(r: Rota) {
-  try {
-    const u = currentUser ?? (userId ? await fetchUserById(userId.trim()) : null);
-    if (!u) throw new Error("Carregue o usuário (ID) antes");
-
-    const text = `${u.id}\n${(u.name || "").toUpperCase()}\n${(u.modal || "").toUpperCase()}\n${r.id}`;
-    await navigator.clipboard.writeText(text);
-    alert("Copiado!");
-  } catch (e: any) {
-    alert(e.message || "Não foi possível copiar");
-  }
-}
-
 async function idbSetFile(file: File) {
   const db = await idbOpen();
   if (!db) return;
@@ -256,11 +214,13 @@ async function idbDelFile() {
 /* =========================
    Componente principal
 ========================= */
-export default function RomaneioPage() {
+export default function HomeClient() {
+  // --- states principais
   const [rotas, setRotas] = useState<Rota[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // visão e ordenação
   const [mode, setMode] = useState<Mode>("tempo");
   const [filterBand, setFilterBand] = useState<"all" | "green" | "yellow" | "red">("all");
   const [search, setSearch] = useState("");
@@ -268,15 +228,19 @@ export default function RomaneioPage() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [selected, setSelected] = useState<Rota | null>(null);
 
+  // cache de arquivo/dataset
   const [meta, setMeta] = useState<LastMeta | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const dropRef = useRef<HTMLLabelElement | null>(null);
 
+  // usuário (para o botão Pegar rota)
+  const [userId, setUserId] = useState<string>(() => localStorage.getItem("romaneio:userId") || "");
+  const [currentUser, setCurrentUser] = useState<SimpleUser | null>(null);
+  useEffect(() => { localStorage.setItem("romaneio:userId", userId || ""); }, [userId]);
+
   const closeModal = () => setSelected(null);
   useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeModal();
-    };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") closeModal(); };
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
   }, []);
@@ -291,43 +255,23 @@ export default function RomaneioPage() {
         const m = JSON.parse(mraw) as LastMeta;
         setRotas(parsed);
         setMeta(m);
-        // se foi pdf, tenta preparar URL
         if (m.kind === "pdf") {
           idbGetFile().then((f) => {
-            if (f && f.type === "application/pdf") {
-              const url = URL.createObjectURL(f);
-              setPdfUrl(url);
-            }
+            if (f && f.type === "application/pdf") setPdfUrl(URL.createObjectURL(f));
           });
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {/* ignore */}
   }, []);
 
-  // Drag & Drop highlight
+  // Drag & drop highlight
   useEffect(() => {
     const el = dropRef.current;
     if (!el) return;
-    const prevent = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    const onDragOver = (e: DragEvent) => {
-      prevent(e);
-      el.classList.add("ring-2", "ring-zinc-300");
-    };
-    const onDragLeave = (e: DragEvent) => {
-      prevent(e);
-      el.classList.remove("ring-2", "ring-zinc-300");
-    };
-    const onDrop = (e: DragEvent) => {
-      prevent(e);
-      el.classList.remove("ring-2", "ring-zinc-300");
-      const f = e.dataTransfer?.files?.[0];
-      if (f) importFile(f);
-    };
+    const prevent = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); };
+    const onDragOver = (e: DragEvent) => { prevent(e); el.classList.add("ring-2","ring-zinc-300"); };
+    const onDragLeave = (e: DragEvent) => { prevent(e); el.classList.remove("ring-2","ring-zinc-300"); };
+    const onDrop = (e: DragEvent) => { prevent(e); el.classList.remove("ring-2","ring-zinc-300"); const f=e.dataTransfer?.files?.[0]; if (f) importFile(f); };
     el.addEventListener("dragover", onDragOver);
     el.addEventListener("dragleave", onDragLeave);
     el.addEventListener("drop", onDrop);
@@ -339,12 +283,7 @@ export default function RomaneioPage() {
   }, []);
 
   const rememberData = async (kind: LastMeta["kind"], file?: File, filename?: string, mime?: string) => {
-    const m: LastMeta = {
-      filename: filename ?? file?.name ?? "arquivo",
-      mime: mime ?? file?.type,
-      importedAt: Date.now(),
-      kind,
-    };
+    const m: LastMeta = { filename: filename ?? file?.name ?? "arquivo", mime: mime ?? file?.type, importedAt: Date.now(), kind };
     localStorage.setItem(LS_DATA, JSON.stringify(rotas));
     localStorage.setItem(LS_META, JSON.stringify(m));
     setMeta(m);
@@ -359,59 +298,44 @@ export default function RomaneioPage() {
     setPdfUrl(null);
   };
 
+  // ----- Importação de arquivo (planilha ou pdf)
   const importFile = async (file: File) => {
-    setBusy(true);
-    setError(null);
+    setBusy(true); setError(null);
     try {
-      // Se for PDF: apenas guarda no cache e mostra link para abrir
+      // PDF: apenas guarda
       if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
         await idbSetFile(file);
         localStorage.setItem(LS_DATA, JSON.stringify([]));
-        localStorage.setItem(
-          LS_META,
-          JSON.stringify({ filename: file.name, mime: file.type, importedAt: Date.now(), kind: "pdf" } satisfies LastMeta)
-        );
-        setRotas([]);
-        setMeta({ filename: file.name, mime: file.type, importedAt: Date.now(), kind: "pdf" });
-        const url = URL.createObjectURL(file);
-        setPdfUrl(url);
+        const m: LastMeta = { filename: file.name, mime: file.type, importedAt: Date.now(), kind: "pdf" };
+        localStorage.setItem(LS_META, JSON.stringify(m));
+        setRotas([]); setMeta(m);
+        setPdfUrl(URL.createObjectURL(file));
         return;
       }
 
-      // Planilha → processa
+      // Planilha
       const data = await file.arrayBuffer();
       const wb = XLSX.read(data, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(ws, { defval: "" }) as Record<string, unknown>[];
-      if (!json.length) {
-        setError("Planilha vazia ou inválida.");
-        return;
-      }
+      if (!json.length) { setError("Planilha vazia ou inválida."); return; }
 
       const cols = Object.keys(json[0]);
       const map = guessMap(cols);
-      if (!map.CorridorCage) {
-        setError("Não encontrei a coluna obrigatória: Corridor Cage (J).");
-        return;
-      }
+      if (!map.CorridorCage) { setError("Não encontrei a coluna obrigatória: Corridor Cage (J)."); return; }
 
       const rotaMap = new Map<string, Rota>();
       for (const row of json) {
         const id = getStr(row, map.CorridorCage);
         if (!id) continue;
 
-        const r =
-          rotaMap.get(id) ??
-          ({
-            id,
-            qtdEnderecos: 0,
-            deliveryTimesMin: [],
-            stopsMax: undefined,
-            neighborhoodSample: map.Neighborhood ? getStr(row, map.Neighborhood) : "",
-            locationTypes: [],
-            plannedATSample: map.PlannedAT ? getStr(row, map.PlannedAT) : "",
-            addresses: [],
-          } as Rota);
+        const r = rotaMap.get(id) ?? {
+          id, qtdEnderecos: 0, deliveryTimesMin: [],
+          stopsMax: undefined,
+          neighborhoodSample: map.Neighborhood ? getStr(row, map.Neighborhood) : "",
+          locationTypes: [], plannedATSample: map.PlannedAT ? getStr(row, map.PlannedAT) : "",
+          addresses: [],
+        } as Rota;
 
         r.qtdEnderecos++;
 
@@ -445,14 +369,11 @@ export default function RomaneioPage() {
       }));
 
       setRotas(out);
-      // salva dataset + arquivo bruto
+      const m: LastMeta = { filename: file.name, mime: file.type, importedAt: Date.now(), kind: "sheet" };
       localStorage.setItem(LS_DATA, JSON.stringify(out));
-      localStorage.setItem(
-        LS_META,
-        JSON.stringify({ filename: file.name, mime: file.type, importedAt: Date.now(), kind: "sheet" } satisfies LastMeta)
-      );
+      localStorage.setItem(LS_META, JSON.stringify(m));
       await idbSetFile(file);
-      setMeta({ filename: file.name, mime: file.type, importedAt: Date.now(), kind: "sheet" });
+      setMeta(m);
       setPdfUrl(null);
     } catch (e: any) {
       setError(e?.message ?? "Falha ao processar arquivo.");
@@ -461,34 +382,20 @@ export default function RomaneioPage() {
     }
   };
 
-  const worstMinutesOf = (r: Rota): number | null =>
-    r.deliveryTimesMin.length ? Math.max(...r.deliveryTimesMin) : null;
-
-  const avgMinutesOf = (r: Rota): number | null =>
-    r.deliveryTimesMin.length ? Math.round(r.deliveryTimesMin.reduce((a, b) => a + b, 0) / r.deliveryTimesMin.length) : null;
-
-  const stopsCountOf = (r: Rota): number => (r.stopsMax && r.stopsMax > 0 ? r.stopsMax : r.qtdEnderecos);
-
-  const scoreOf = (r: Rota, m: Mode): number | null => {
-    if (m === "tempo") return worstMinutesOf(r);
-    return stopsCountOf(r);
-  };
-
-  const bandOf = (r: Rota, m: Mode): "green" | "yellow" | "red" | "none" => {
-    if (m === "tempo") return bandTempo(worstMinutesOf(r));
-    return bandParadas(stopsCountOf(r));
-  };
+  // ----- helpers de métrica
+  const worstMinutesOf = (r: Rota): number | null => r.deliveryTimesMin.length ? Math.max(...r.deliveryTimesMin) : null;
+  const avgMinutesOf   = (r: Rota): number | null =>
+    r.deliveryTimesMin.length ? Math.round(r.deliveryTimesMin.reduce((a,b)=>a+b,0)/r.deliveryTimesMin.length) : null;
+  const stopsCountOf   = (r: Rota): number => (r.stopsMax && r.stopsMax > 0 ? r.stopsMax : r.qtdEnderecos);
+  const scoreOf        = (r: Rota, m: Mode): number | null => (m === "tempo" ? worstMinutesOf(r) : stopsCountOf(r));
+  const bandOf         = (r: Rota, m: Mode): "green"|"yellow"|"red"|"none" => (m === "tempo" ? bandTempo(worstMinutesOf(r)) : bandParadas(stopsCountOf(r)));
 
   const stats = useMemo(() => {
     const total = rotas.length;
-    let green = 0,
-      yellow = 0,
-      red = 0;
+    let green=0,yellow=0,red=0;
     for (const r of rotas) {
       const b = bandOf(r, mode);
-      if (b === "green") green++;
-      else if (b === "yellow") yellow++;
-      else if (b === "red") red++;
+      if (b==="green") green++; else if (b==="yellow") yellow++; else if (b==="red") red++;
     }
     return { total, green, yellow, red };
   }, [rotas, mode]);
@@ -516,16 +423,9 @@ export default function RomaneioPage() {
       let va: number | string | null;
       let vb: number | string | null;
 
-      if (sortKey === "id") {
-        va = a.id.toLowerCase();
-        vb = b.id.toLowerCase();
-      } else if (sortKey === "avg") {
-        va = mode === "tempo" ? avgMinutesOf(a) : stopsCountOf(a);
-        vb = mode === "tempo" ? avgMinutesOf(b) : stopsCountOf(b);
-      } else {
-        va = scoreOf(a, mode);
-        vb = scoreOf(b, mode);
-      }
+      if (sortKey === "id") { va = a.id.toLowerCase(); vb = b.id.toLowerCase(); }
+      else if (sortKey === "avg") { va = mode==="tempo" ? avgMinutesOf(a) : stopsCountOf(a); vb = mode==="tempo" ? avgMinutesOf(b) : stopsCountOf(b); }
+      else { va = scoreOf(a, mode); vb = scoreOf(b, mode); }
 
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
@@ -542,13 +442,13 @@ export default function RomaneioPage() {
   const exportCSV = () => {
     const rows = filteredSorted.map((r) => {
       const worst = worstMinutesOf(r);
-      const avg = avgMinutesOf(r);
-      const stopsTotal = stopsCountOf(r);
+      const avg   = avgMinutesOf(r);
+      const stops = stopsCountOf(r);
       const score = scoreOf(r, mode);
       return {
         CorridorCage: r.id,
-        ParadasTotal: stopsTotal,
-        Score: mode === "tempo" ? mmStr(score as number | null) : score,
+        ParadasTotal: stops,
+        Score: mode === "tempo" ? mmStr(score) : score,
         Worst: mmStr(worst),
         Avg: mmStr(avg),
         Neighborhood: r.neighborhoodSample || "",
@@ -575,6 +475,35 @@ export default function RomaneioPage() {
     URL.revokeObjectURL(url);
   };
 
+  // ----- usuário / copiar rota
+  async function fetchUserById(id: string) {
+    const res = await fetch(`/api/user/${encodeURIComponent(id)}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status === 404 ? "Usuário não encontrado" : "Falha ao buscar usuário");
+    const u = (await res.json()) as SimpleUser;
+    setCurrentUser(u);
+    return u;
+  }
+  async function handleLoadUser() {
+    try {
+      if (!userId.trim()) throw new Error("Informe o ID do usuário");
+      await fetchUserById(userId.trim());
+    } catch (e: any) {
+      setCurrentUser(null);
+      alert(e.message || "Erro ao carregar usuário");
+    }
+  }
+  async function copyRoute(r: Rota) {
+    try {
+      const u = currentUser ?? (userId ? await fetchUserById(userId.trim()) : null);
+      if (!u) throw new Error("Carregue o usuário (ID) antes");
+      const text = `${u.id}\n${(u.name || "").toUpperCase()}\n${(u.modal || "").toUpperCase()}\n${r.id}`;
+      await navigator.clipboard.writeText(text);
+      alert("Copiado!");
+    } catch (e: any) {
+      alert(e.message || "Não foi possível copiar");
+    }
+  }
+
   /* ============= UI ============= */
   return (
     <main className="space-y-6">
@@ -584,8 +513,7 @@ export default function RomaneioPage() {
           <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2">
-                {/* ícone simples */}
-                <div className="h-8 w-8 rounded-xl bg-blue-600/10 grid place-items-center">
+                <div className="grid h-8 w-8 place-items-center rounded-xl bg-blue-600/10">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                     <path d="M4 7h16M4 12h16M4 17h10" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" />
                   </svg>
@@ -608,52 +536,20 @@ export default function RomaneioPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex rounded-xl border bg-white p-1 shadow-sm">
-                <button
-                  onClick={() => setMode("tempo")}
-                  className={`rounded-lg px-3 py-1.5 text-xs ${mode === "tempo" ? "bg-zinc-900 text-white" : ""}`}
-                  title="Tempo de entrega"
-                >
-                  Tempo
-                </button>
-                <button
-                  onClick={() => setMode("paradas")}
-                  className={`rounded-lg px-3 py-1.5 text-xs ${mode === "paradas" ? "bg-zinc-900 text-white" : ""}`}
-                  title="Quantidade de paradas"
-                >
-                  Paradas
-                </button>
+                <button onClick={() => setMode("tempo")}   className={`rounded-lg px-3 py-1.5 text-xs ${mode==="tempo"   ? "bg-zinc-900 text-white" : ""}`}>Tempo</button>
+                <button onClick={() => setMode("paradas")} className={`rounded-lg px-3 py-1.5 text-xs ${mode==="paradas" ? "bg-zinc-900 text-white" : ""}`}>Paradas</button>
               </div>
 
-              <label
-                ref={dropRef}
-                className="inline-flex cursor-pointer items-center gap-2 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
-                title="Importe .xlsx, .xls, .csv ou .pdf"
-              >
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv,.pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) importFile(f);
-                  }}
-                />
+              <label ref={dropRef} className="inline-flex cursor-pointer items-center gap-2 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50" title="Importe .xlsx, .xls, .csv ou .pdf">
+                <input type="file" accept=".xlsx,.xls,.csv,.pdf" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if (f) importFile(f); }} />
                 Importar arquivo
               </label>
 
-              <button
-                onClick={downloadCachedFile}
-                className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50 disabled:opacity-50"
-                disabled={!meta}
-                title="Baixar o arquivo importado"
-              >
+              <button onClick={downloadCachedFile} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50 disabled:opacity-50" disabled={!meta}>
                 Baixar arquivo
               </button>
 
-              <button
-                onClick={exportCSV}
-                className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
-              >
+              <button onClick={exportCSV} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50">
                 Exportar CSV
               </button>
 
@@ -666,41 +562,25 @@ export default function RomaneioPage() {
                   className="w-40 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm"
                   title="ID do motorista/usuário (coluna id)"
                 />
-                <button
-                  onClick={handleLoadUser}
-                  className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
-                >
+                <button onClick={handleLoadUser} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50">
                   Carregar
                 </button>
                 {currentUser && (
                   <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs">
-                    {currentUser.name || "—"} · {(currentUser.modal || "—")}
+                    {currentUser.name || "—"} · {currentUser.modal || "—"}
                   </span>
                 )}
               </div>
 
-              <button
-                onClick={() => {
-                  setRotas([]);
-                  clearCache();
-                }}
-                className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
-                title="Limpa dataset e arquivo do cache"
-              >
+              <button onClick={() => { setRotas([]); clearCache(); }} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50">
                 Limpar cache
               </button>
             </div>
           </header>
 
-          {/* Se importou PDF, mostra um botão para abrir */}
           {pdfUrl && (
             <div className="mt-3">
-              <a
-                href={pdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
-              >
+              <a href={pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50">
                 Ver PDF importado
               </a>
             </div>
@@ -710,104 +590,43 @@ export default function RomaneioPage() {
 
       {/* KPIs */}
       <section className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <div className="rounded-xl border bg-white p-3 shadow">
-          <div className="text-[11px] text-zinc-500">Rotas</div>
-          <div className="text-xl font-semibold">{stats.total}</div>
-        </div>
-        <div className="rounded-xl border bg-white p-3 shadow">
-          <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-            <span className="inline-block h-3 w-3 rounded-full bg-green-600" />
-            Verdes
-          </div>
-          <div className="text-xl font-semibold">{stats.green}</div>
-        </div>
-        <div className="rounded-xl border bg-white p-3 shadow">
-          <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-            <span className="inline-block h-3 w-3 rounded-full bg-orange-500" />
-            Laranjas
-          </div>
-          <div className="text-xl font-semibold">{stats.yellow}</div>
-        </div>
-        <div className="rounded-xl border bg-white p-3 shadow">
-          <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-            <span className="inline-block h-3 w-3 rounded-full bg-red-600" />
-            Vermelhas
-          </div>
-          <div className="text-xl font-semibold">{stats.red}</div>
-        </div>
+        <div className="rounded-xl border bg-white p-3 shadow"><div className="text-[11px] text-zinc-500">Rotas</div><div className="text-xl font-semibold">{stats.total}</div></div>
+        <div className="rounded-xl border bg-white p-3 shadow"><div className="flex items-center gap-2 text-[11px] text-zinc-500"><span className="inline-block h-3 w-3 rounded-full bg-green-600" />Verdes</div><div className="text-xl font-semibold">{stats.green}</div></div>
+        <div className="rounded-xl border bg-white p-3 shadow"><div className="flex items-center gap-2 text-[11px] text-zinc-500"><span className="inline-block h-3 w-3 rounded-full bg-orange-500" />Laranjas</div><div className="text-xl font-semibold">{stats.yellow}</div></div>
+        <div className="rounded-xl border bg-white p-3 shadow"><div className="flex items-center gap-2 text-[11px] text-zinc-500"><span className="inline-block h-3 w-3 rounded-full bg-red-600" />Vermelhas</div><div className="text-xl font-semibold">{stats.red}</div></div>
       </section>
 
       {/* Filtros + Ordenação */}
       <section className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
-          {(["all", "green", "yellow", "red"] as const).map((b) => (
-            <button
-              key={b}
-              onClick={() => setFilterBand(b)}
-              className={`rounded-full px-3 py-1 text-xs border ${
-                filterBand === b ? "bg-zinc-900 text-white" : "bg-white"
-              }`}
-            >
-              {b === "all" ? (
-                "Todas"
-              ) : (
-                <>
-                  <span
-                    className={`mr-2 inline-block h-2 w-2 rounded-full ${
-                      b === "green" ? "bg-green-600" : b === "yellow" ? "bg-orange-500" : "bg-red-600"
-                    }`}
-                  />
-                  {b === "green" ? "Verdes" : b === "yellow" ? "Laranjas" : "Vermelhas"}
-                </>
-              )}
+          {(["all","green","yellow","red"] as const).map((b)=>(
+            <button key={b} onClick={()=>setFilterBand(b)} className={`rounded-full px-3 py-1 text-xs border ${filterBand===b?"bg-zinc-900 text-white":"bg-white"}`}>
+              {b==="all" ? "Todas" : (<><span className={`mr-2 inline-block h-2 w-2 rounded-full ${b==="green"?"bg-green-600":b==="yellow"?"bg-orange-500":"bg-red-600"}`} />{b==="green"?"Verdes":b==="yellow"?"Laranjas":"Vermelhas"}</>)}
             </button>
           ))}
         </div>
 
         <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Buscar rotas, bairro ou tipo"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full sm:w-64 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm"
-          />
-          <select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="rounded-xl border bg-white px-2 py-2 text-xs"
-            title="Ordenar por"
-          >
-            <option value="score">{mode === "tempo" ? "Pior tempo" : "Nº paradas (max)"}</option>
-            <option value="avg">{mode === "tempo" ? "Tempo médio" : "Nº paradas (max)"}</option>
+          <input type="text" placeholder="Buscar rotas, bairro ou tipo" value={search} onChange={(e)=>setSearch(e.target.value)} className="w-full sm:w-64 rounded-xl border bg-white px-3 py-2 text-xs shadow-sm" />
+          <select value={sortKey} onChange={(e)=>setSortKey(e.target.value as SortKey)} className="rounded-xl border bg-white px-2 py-2 text-xs" title="Ordenar por">
+            <option value="score">{mode==="tempo"?"Pior tempo":"Nº paradas (max)"}</option>
+            <option value="avg">{mode==="tempo"?"Tempo médio":"Nº paradas (max)"}</option>
             <option value="id">Rota (ID)</option>
           </select>
-          <button
-            onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-            className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50"
-            title="Inverter ordem"
-          >
-            {sortDir === "asc" ? "Asc" : "Desc"}
+          <button onClick={()=>setSortDir(d=>d==="asc"?"desc":"asc")} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50" title="Inverter ordem">
+            {sortDir==="asc"?"Asc":"Desc"}
           </button>
         </div>
       </section>
 
       {/* Avisos */}
       {busy && <div className="rounded-xl border bg-white p-3 text-xs shadow-sm">Processando arquivo…</div>}
-      {error && (
-        <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">{error}</div>
-      )}
+      {error && <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">{error}</div>}
 
       {/* Empty state */}
       {!busy && !error && rotas.length === 0 && (
         <section className="rounded-2xl border border-dashed bg-white p-8 text-center text-sm text-zinc-600">
-          <div className="mx-auto mb-3 h-10 w-10 rounded-full bg-zinc-100 grid place-items-center">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M4 7h16M4 12h16M4 17h10" stroke="#525252" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </div>
-          Importe um arquivo de romaneio (.xlsx, .xls, .csv) ou um PDF. O último arquivo fica salvo no navegador
-          até você importar outro.
+          Importe um arquivo de romaneio (.xlsx, .xls, .csv) ou um PDF. O último arquivo fica salvo no navegador até você importar outro.
         </section>
       )}
 
@@ -819,101 +638,50 @@ export default function RomaneioPage() {
           const worst = worstMinutesOf(r);
           const avg = avgMinutesOf(r);
           const stopsTotal = stopsCountOf(r);
-          const selo = mode === "tempo" ? mmStr(worst) : `${stopsTotal} stops`;
+          const selo = mode==="tempo"? mmStr(worst) : `${stopsTotal} stops`;
 
           return (
-            <div
-              key={r.id}
-              className={`relative cursor-pointer rounded-lg p-2 text-white shadow transition hover:scale-[1.01] ${bg}`}
-              onClick={() => setSelected(r)}
-            >
-              <div className="absolute right-2 top-2 rounded-full bg-black/25 px-2 py-0.5 text-[10px]">
-                {selo}
-              </div>
+            <div key={r.id} className={`relative cursor-pointer rounded-lg p-2 text-white shadow transition hover:scale-[1.01] ${bg}`} onClick={() => setSelected(r)}>
+              <div className="absolute right-2 top-2 rounded-full bg-black/25 px-2 py-0.5 text-[10px]">{selo}</div>
               <div className="mt-2 flex justify-end">
-                <button
-                  onClick={(e) => { e.stopPropagation(); copyRoute(r); }}
-                  className="rounded-md bg-black/25 px-2 py-1 text-[11px] hover:bg-black/35"
-                  title="Copiar ID, NOME, MODAL e ROTA"
-                >
+                <button onClick={(e)=>{ e.stopPropagation(); copyRoute(r); }} className="rounded-md bg-black/25 px-2 py-1 text-[11px] hover:bg-black/35" title="Copiar ID, NOME, MODAL e ROTA">
                   Pegar rota
                 </button>
               </div>
               <div className="text-[13px] font-bold leading-tight">Rota {r.id}</div>
-              <div className="mt-0.5 truncate text-[11px] opacity-90">
-                {r.neighborhoodSample || "—"}
-              </div>
+              <div className="mt-0.5 truncate text-[11px] opacity-90">{r.neighborhoodSample || "—"}</div>
               {r.locationTypes && r.locationTypes.length > 0 && (
                 <div className="mt-0.5 truncate text-[11px] opacity-90">
-                  Tipos: {r.locationTypes.slice(0, 3).join(", ")}
-                  {r.locationTypes.length > 3 && "…"}
+                  Tipos: {r.locationTypes.slice(0,3).join(", ")}{r.locationTypes.length > 3 && "…"}
                 </div>
               )}
-
               <div className="mt-1.5 flex items-center justify-between text-[10px] opacity-90">
-                {mode === "tempo" ? (
-                  <>
-                    <span>Média: {mmStr(avg)}</span>
-                    <span>Stops (max): {stopsTotal}</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Paradas (max): {stopsTotal}</span>
-                    <span>Média: {r.deliveryTimesMin.length ? mmStr(avg) : "—"}</span>
-                  </>
-                )}
+                {mode==="tempo" ? (<><span>Média: {mmStr(avg)}</span><span>Stops (max): {stopsTotal}</span></>) : (<><span>Paradas (max): {stopsTotal}</span><span>Média: {r.deliveryTimesMin.length ? mmStr(avg) : "—"}</span></>)}
               </div>
             </div>
           );
         })}
       </section>
 
-      {/* Modal dos endereços */}
+      {/* Modal */}
       {selected && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={closeModal}
-        >
-          <div
-            className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeModal}>
+          <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl" onClick={(e)=>e.stopPropagation()}>
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <div className="font-semibold">
-                Rota {selected.id} — Endereços
-                <span className="ml-2 text-xs text-zinc-500">({selected.addresses.length} linhas)</span>
-              </div>
-              <button onClick={closeModal} className="rounded-md border px-2 py-1 text-xs hover:bg-zinc-50">
-                Fechar
-              </button>
+              <div className="font-semibold">Rota {selected.id} — Endereços <span className="ml-2 text-xs text-zinc-500">({selected.addresses.length} linhas)</span></div>
+              <button onClick={closeModal} className="rounded-md border px-2 py-1 text-xs hover:bg-zinc-50">Fechar</button>
             </div>
-
             <div className="max-h-[70vh] overflow-auto px-4 py-3">
               <ol className="space-y-2 text-sm">
-                {selected.addresses
-                  .slice()
-                  .sort((a, b) => {
-                    const aa = a.stop ?? Number.POSITIVE_INFINITY;
-                    const bb = b.stop ?? Number.POSITIVE_INFINITY;
-                    return aa - bb;
-                  })
-                  .map((it, idx) => (
-                    <li key={idx} className="rounded-md border p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium">
-                          {it.stop != null ? `#${it.stop}` : `#${idx + 1}`}
-                        </span>
-                        <button
-                          className="text-xs text-zinc-500 hover:underline"
-                          onClick={() => navigator.clipboard.writeText(it.address)}
-                          title="Copiar"
-                        >
-                          copiar
-                        </button>
-                      </div>
-                      <div className="mt-1 text-zinc-800">{it.address}</div>
-                    </li>
-                  ))}
+                {selected.addresses.slice().sort((a,b)=> (a.stop ?? 1e9) - (b.stop ?? 1e9)).map((it, idx)=>(
+                  <li key={idx} className="rounded-md border p-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{it.stop != null ? `#${it.stop}` : `#${idx+1}`}</span>
+                      <button className="text-xs text-zinc-500 hover:underline" onClick={() => navigator.clipboard.writeText(it.address)} title="Copiar">copiar</button>
+                    </div>
+                    <div className="mt-1 text-zinc-800">{it.address}</div>
+                  </li>
+                ))}
               </ol>
             </div>
           </div>
