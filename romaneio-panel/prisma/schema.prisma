@@ -13,7 +13,7 @@ model User {
   name           String?
   email          String?  @unique
   emailVerified  DateTime?
-  modal          String? @map("image")
+  image          String? @map("image")
   password       String?  // hash da senha (bcrypt)
 
   accounts       Account[]
