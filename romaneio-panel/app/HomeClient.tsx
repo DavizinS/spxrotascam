@@ -217,7 +217,7 @@ async function idbDelFile() {
    GEO + PARADAS
 ========================= */
 type LatLng = { lat: number; lng: number };
-const GEO_CACHE_KEY = "romaneio:geocache:v1";
+const GEO_CACHE_KEY = "romaneio:geocache:v2";
 
 function normalizeBaseAddress(raw: string) {
   let s = raw
@@ -236,29 +236,68 @@ function loadGeoCache(): Record<string, LatLng> {
 function saveGeoCache(cache: Record<string, LatLng>) {
   localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(cache));
 }
-async function geocodeBase(base: string): Promise<LatLng | null> {
+
+// heurística: se não tiver "rio" ou "rj" ou "brasil", adiciona sufixo pra ajudar precisão
+function withRioContext(base: string) {
+  const s = base.toLowerCase();
+  if (s.includes("rj") || s.includes("rio de janeiro") || s.includes("brasil")) return base;
+  return `${base}, Rio de Janeiro - RJ, Brasil`;
+}
+
+// mini pool de concorrência
+async function runPool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  const queue = items.slice();
+  const runners: Promise<void>[] = [];
+  for (let i = 0; i < Math.min(limit, queue.length); i++) {
+    runners.push((async function loop() {
+      while (queue.length) {
+        const it = queue.shift()!;
+        await worker(it);
+      }
+    })());
+  }
+  await Promise.all(runners);
+}
+
+
+async function geocodeBase(base: string, signal?: AbortSignal): Promise<LatLng | null> {
   const cache = loadGeoCache();
   if (cache[base]) return cache[base];
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(base)}&addressdetails=0&limit=1&countrycodes=br`;
-  const res = await fetch(url, { headers: { "Accept-Language": "pt-BR" } });
+
+  const q = withRioContext(base);
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&addressdetails=0&limit=1&countrycodes=br`;
+
+  const res = await fetch(url, { headers: { "Accept-Language": "pt-BR" }, signal });
   if (!res.ok) return null;
   const data = await res.json();
   if (!Array.isArray(data) || data.length === 0) return null;
+
   const { lat, lon } = data[0] as { lat: string; lon: string };
   const ll = { lat: parseFloat(lat), lng: parseFloat(lon) };
+
+  // grava cache
   cache[base] = ll;
   saveGeoCache(cache);
-  await new Promise(r => setTimeout(r, 180)); // evita throttle
   return ll;
 }
-async function geocodeMany(bases: string[]): Promise<Record<string, LatLng>> {
+// principal: até 6 em paralelo + abort
+async function geocodeMany(bases: string[], signal?: AbortSignal): Promise<Record<string, LatLng>> {
   const out: Record<string, LatLng> = {};
-  for (const b of bases) {
-    const ll = await geocodeBase(b);
+  const cache = loadGeoCache();
+
+  const todo = bases.filter(b => !cache[b]);
+  // já preenche o que tiver no cache
+  for (const b of bases) if (cache[b]) out[b] = cache[b];
+
+  await runPool(todo, 6, async (b) => {
+    if (signal?.aborted) return;
+    const ll = await geocodeBase(b, signal).catch(() => null);
     if (ll) out[b] = ll;
-  }
+  });
+
   return out;
 }
+
 function haversineMeters(a: LatLng, b: LatLng) {
   const R = 6371000;
   const dLat = (b.lat - a.lat) * Math.PI/180;
@@ -280,15 +319,15 @@ type Stop = {
 
 function InlineRouteMap({ stops }: { stops: Stop[] }) {
   const mapRef = useRef<HTMLDivElement | null>(null);
-  const leafletRef = useRef<any>(null);     // L
-  const mapInstance = useRef<any>(null);    // L.Map
-  const layerGroup = useRef<any>(null);     // L.LayerGroup
+  const leafletRef = useRef<typeof import("leaflet") | null>(null);
+  const mapInstance = useRef<import("leaflet").Map | null>(null);
+  const layerGroup  = useRef<import("leaflet").LayerGroup | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!mapRef.current) return;
-      const L = (await import("leaflet")).default;
+      const L = await import("leaflet");
       leafletRef.current = L;
 
       L.Icon.Default.mergeOptions({
@@ -305,11 +344,14 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
           attribution: "&copy; OpenStreetMap",
           maxZoom: 19,
         }).addTo(mapInstance.current);
-        layerGroup.current = L.layerGroup().addTo(mapInstance.current);
+      }
+      // garante que o group existe
+      if (!layerGroup.current) {
+        layerGroup.current = L.layerGroup().addTo(mapInstance.current!);
       }
 
       // limpa marcadores antigos
-      layerGroup.current.clearLayers();
+      layerGroup.current?.clearLayers();
 
       // adiciona marcadores
       const bounds = L.latLngBounds([]);
@@ -327,7 +369,8 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
           `;
           return div;
         });
-        marker.addTo(layerGroup.current);
+
+        layerGroup.current!.addLayer(marker);
         bounds.extend([s.latlng.lat, s.latlng.lng]);
       }
 
@@ -336,7 +379,15 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // desmonta o mapa se o componente sair (ex.: fechar modal)
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+        layerGroup.current = null;
+      }
+    };
   }, [stops]);
 
   return <div ref={mapRef} className="h-[360px] w-full overflow-hidden rounded-xl border" />;
