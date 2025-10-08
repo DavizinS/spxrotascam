@@ -307,6 +307,23 @@ function haversineMeters(a: LatLng, b: LatLng) {
   return 2 * R * Math.asin(Math.sqrt(aa));
 }
 
+// ordena paradas: usa o menor "stop" encontrado nos items; se não houver, mantém ordem original
+function sortStopsForPath(stops: Stop[]): Stop[] {
+  // gera uma chave de ordem por parada
+  const keyFor = (s: Stop) => {
+    let k = Number.POSITIVE_INFINITY;
+    for (const it of s.items) {
+      if (typeof it.stop === "number") k = Math.min(k, it.stop);
+    }
+    return k;
+  };
+  // verifica se existe ao menos uma parada com número
+  const anyNumbered = stops.some(s => s.items.some(it => typeof it.stop === "number"));
+  if (!anyNumbered) return stops.slice(); // mantém ordem original
+
+  return stops.slice().sort((a,b) => keyFor(a) - keyFor(b));
+}
+
 /* =========================
    Mapa Inline (Leaflet direto)
 ========================= */
@@ -374,7 +391,7 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
           div.innerHTML = `
             <strong>${s.base}</strong><br/>
             ${s.count} parada(s)
-            <ul style="margin-top:6px;">
+            <ul style="margin-top:8px;">
               ${s.items.slice(0,6).map(it => `<li>${it.stop != null ? `#${it.stop} ` : ""}${it.address}</li>`).join("")}
             </ul>
             ${s.items.length > 6 ? `<em>…e mais ${s.items.length-6}</em>` : ""}
@@ -384,6 +401,24 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
 
         layerGroup.current!.addLayer(marker);
         bounds.extend([s.latlng.lat, s.latlng.lng]);
+      }
+
+      // === RASTRO AZUL (polyline) ===
+      const ordered = sortStopsForPath(stops);
+      const latlngs = ordered.map(s => [s.latlng.lat, s.latlng.lng]) as [number, number][];
+
+      if (latlngs.length >= 2) {
+        // opcional: renderer canvas para performance
+        const renderer = L.canvas();
+        const path = L.polyline(latlngs, {
+          color: "#2563eb",
+          weight: 4,
+          opacity: 0.9,
+          lineJoin: "round",
+          lineCap: "round",
+          renderer,
+        });
+        layerGroup.current!.addLayer(path);
       }
 
       if (!cancelled && stops.length > 0) {
