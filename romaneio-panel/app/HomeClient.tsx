@@ -214,6 +214,129 @@ async function idbDelFile() {
 }
 
 /* =========================
+   GEO + PARADAS
+========================= */
+type LatLng = { lat: number; lng: number };
+const GEO_CACHE_KEY = "romaneio:geocache:v1";
+
+function normalizeBaseAddress(raw: string) {
+  let s = raw
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u00a0/g, " ")
+    .toLowerCase().trim();
+  s = s.replace(/,\s*(apto|apt|apartamento|sala|sl|bloco|bl|torre|tr|casa|loja|kit|conj|cj|andar|ed|edificio|quadra|lote|fundos)[^,]*/g, "");
+  const m = s.match(/(.+?),\s*(\d+)/);
+  if (!m) return raw.trim();
+  const [_, logradouro, numero] = m;
+  return `${logradouro.trim()}, ${numero.trim()}`;
+}
+function loadGeoCache(): Record<string, LatLng> {
+  try { return JSON.parse(localStorage.getItem(GEO_CACHE_KEY) || "{}"); } catch { return {}; }
+}
+function saveGeoCache(cache: Record<string, LatLng>) {
+  localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(cache));
+}
+async function geocodeBase(base: string): Promise<LatLng | null> {
+  const cache = loadGeoCache();
+  if (cache[base]) return cache[base];
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(base)}&addressdetails=0&limit=1&countrycodes=br`;
+  const res = await fetch(url, { headers: { "Accept-Language": "pt-BR" } });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const { lat, lon } = data[0] as { lat: string; lon: string };
+  const ll = { lat: parseFloat(lat), lng: parseFloat(lon) };
+  cache[base] = ll;
+  saveGeoCache(cache);
+  await new Promise(r => setTimeout(r, 180)); // evita throttle
+  return ll;
+}
+async function geocodeMany(bases: string[]): Promise<Record<string, LatLng>> {
+  const out: Record<string, LatLng> = {};
+  for (const b of bases) {
+    const ll = await geocodeBase(b);
+    if (ll) out[b] = ll;
+  }
+  return out;
+}
+function haversineMeters(a: LatLng, b: LatLng) {
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI/180;
+  const dLon = (b.lng - a.lng) * Math.PI/180;
+  const s1 = Math.sin(dLat/2), s2 = Math.sin(dLon/2);
+  const aa = s1*s1 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*s2*s2;
+  return 2 * R * Math.asin(Math.sqrt(aa));
+}
+
+/* =========================
+   Mapa Inline (Leaflet direto)
+========================= */
+type Stop = {
+  base: string;
+  latlng: LatLng;
+  count: number;
+  items: AddressItem[];
+};
+
+function InlineRouteMap({ stops }: { stops: Stop[] }) {
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const leafletRef = useRef<any>(null);     // L
+  const mapInstance = useRef<any>(null);    // L.Map
+  const layerGroup = useRef<any>(null);     // L.LayerGroup
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!mapRef.current) return;
+      const L = (await import("leaflet")).default;
+      leafletRef.current = L;
+
+      // cria ou reusa o mapa
+      if (!mapInstance.current) {
+        const center = stops[0]?.latlng ?? { lat: -22.9068, lng: -43.1729 };
+        mapInstance.current = L.map(mapRef.current).setView([center.lat, center.lng], 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap",
+          maxZoom: 19,
+        }).addTo(mapInstance.current);
+        layerGroup.current = L.layerGroup().addTo(mapInstance.current);
+      }
+
+      // limpa marcadores antigos
+      layerGroup.current.clearLayers();
+
+      // adiciona marcadores
+      const bounds = L.latLngBounds([]);
+      for (const s of stops) {
+        const marker = L.marker([s.latlng.lat, s.latlng.lng]).bindPopup(() => {
+          const div = document.createElement("div");
+          div.style.minWidth = "220px";
+          div.innerHTML = `
+            <strong>${s.base}</strong><br/>
+            ${s.count} parada(s)
+            <ul style="margin-top:6px;">
+              ${s.items.slice(0,6).map(it => `<li>${it.stop != null ? `#${it.stop} ` : ""}${it.address}</li>`).join("")}
+            </ul>
+            ${s.items.length > 6 ? `<em>…e mais ${s.items.length-6}</em>` : ""}
+          `;
+          return div;
+        });
+        marker.addTo(layerGroup.current);
+        bounds.extend([s.latlng.lat, s.latlng.lng]);
+      }
+
+      if (!cancelled && stops.length > 0) {
+        mapInstance.current.fitBounds(bounds.pad(0.2));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [stops]);
+
+  return <div ref={mapRef} className="h-[360px] w-full overflow-hidden rounded-xl border" />;
+}
+
+/* =========================
    Componente principal
 ========================= */
 export default function HomeClient() {
@@ -496,8 +619,64 @@ export default function HomeClient() {
     URL.revokeObjectURL(url);
   };
 
-  // ----- usuário / copiar rota
+  /* =========================
+     Paradas (derivadas do selected) + mapa
+  ======================== */
+  const [stops, setStops] = useState<Stop[]>([]);
+  const [stopsBusy, setStopsBusy] = useState(false);
 
+  useEffect(() => {
+    let cancel = false;
+    async function buildStops() {
+      if (!selected) { setStops([]); return; }
+      setStopsBusy(true);
+
+      // 1) agrupa por endereço-base
+      const groups = new Map<string, AddressItem[]>();
+      for (const it of selected.addresses) {
+        const base = normalizeBaseAddress(it.address);
+        const arr = groups.get(base) ?? [];
+        arr.push(it);
+        groups.set(base, arr);
+      }
+      const bases = Array.from(groups.keys());
+
+      // 2) geocodifica bases únicas (com cache local)
+      const coords = await geocodeMany(bases);
+
+      // 3) monta pontos com lat/lng (descarta os que não achar)
+      const rawStops: Stop[] = [];
+      for (const base of bases) {
+        const latlng = coords[base];
+        if (!latlng) continue;
+        rawStops.push({
+          base,
+          latlng,
+          count: groups.get(base)!.length,
+          items: groups.get(base)!,
+        });
+      }
+
+      // 4) consolida por proximidade (~20m)
+      const consolidated: Stop[] = [];
+      const threshold = 20; // metros
+      for (const s of rawStops) {
+        const found = consolidated.find(c => haversineMeters(c.latlng, s.latlng) <= threshold);
+        if (found) {
+          found.count += s.count;
+          found.items.push(...s.items);
+          if (s.items.length > found.items.length) found.base = s.base;
+        } else {
+          consolidated.push({ ...s, items: [...s.items] });
+        }
+      }
+
+      if (!cancel) setStops(consolidated);
+      setStopsBusy(false);
+    }
+    buildStops();
+    return () => { cancel = true; };
+  }, [selected]);
 
   /* ============= UI ============= */
   return (
@@ -547,7 +726,6 @@ export default function HomeClient() {
               <button onClick={exportCSV} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50">
                 Exportar CSV
               </button>
-
 
               <button onClick={() => { setRotas([]); clearCache(); }} className="rounded-xl border bg-white px-3 py-2 text-xs shadow-sm hover:bg-zinc-50">
                 Limpar cache
@@ -645,16 +823,37 @@ export default function HomeClient() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeModal}>
           <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl" onClick={(e)=>e.stopPropagation()}>
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <div className="font-semibold">Rota {selected.id} — Endereços <span className="ml-2 text-xs text-zinc-500">({selected.addresses.length} linhas)</span></div>
+              <div className="font-semibold">
+                Rota {selected.id} — Endereços
+                <span className="ml-2 text-xs text-zinc-500">
+                  ({selected.addresses.length} linhas • {stopsBusy ? "paradas: ..." : `paradas: ${stops.length}`})
+                </span>
+              </div>
               <button onClick={closeModal} className="rounded-md border px-2 py-1 text-xs hover:bg-zinc-50">Fechar</button>
             </div>
-            <div className="max-h-[70vh] overflow-auto px-4 py-3">
+
+            <div className="max-h-[70vh] overflow-auto px-4 py-3 space-y-3">
+              {/* MAPA */}
+              {!stopsBusy && stops.length > 0 && (
+                <InlineRouteMap stops={stops} />
+              )}
+              {stopsBusy && (
+                <div className="rounded-md border p-2 text-xs text-zinc-600">Calculando paradas e gerando mapa…</div>
+              )}
+
+              {/* Lista de endereços */}
               <ol className="space-y-2 text-sm">
-                {selected.addresses.slice().sort((a,b)=> (a.stop ?? 1e9) - (b.stop ?? 1e9)).map((it, idx)=>(
+                {selected.addresses
+                  .slice()
+                  .sort((a,b)=> (a.stop ?? 1e9) - (b.stop ?? 1e9))
+                  .map((it, idx)=>(
                   <li key={idx} className="rounded-md border p-2">
                     <div className="flex items-center justify-between">
                       <span className="font-medium">{it.stop != null ? `#${it.stop}` : `#${idx+1}`}</span>
-                      <button className="text-xs text-zinc-500 hover:underline" onClick={() => navigator.clipboard.writeText(it.address)} title="Copiar">copiar</button>
+                      <button className="text-xs text-zinc-500 hover:underline"
+                        onClick={() => navigator.clipboard.writeText(it.address)} title="Copiar">
+                        copiar
+                      </button>
                     </div>
                     <div className="mt-1 text-zinc-800">{it.address}</div>
                   </li>
