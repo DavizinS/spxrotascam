@@ -225,7 +225,7 @@ function normalizeBaseAddress(raw: string) {
     .replace(/\u00a0/g, " ")
     .toLowerCase().trim();
   s = s.replace(/,\s*(apto|apt|apartamento|sala|sl|bloco|bl|torre|tr|casa|loja|kit|conj|cj|andar|ed|edificio|quadra|lote|fundos)[^,]*/g, "");
-  const m = s.match(/(.+?),\s*(\d+)/);
+  const m = s.match(/(.+?),\s*(\d+)(?!.*\d)/);
   if (!m) return raw.trim();
   const [_, logradouro, numero] = m;
   return `${logradouro.trim()}, ${numero.trim()}`;
@@ -330,6 +330,17 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
       const L = await import("leaflet");
       leafletRef.current = L;
 
+      const smallIcon = L.divIcon({
+        className: "",
+        html: `<div style="
+          width:10px;height:10px;border-radius:50%;
+          background:#2563eb;border:2px solid #fff;
+          box-shadow:0 0 0 1px rgba(0,0,0,.2)
+        "></div>`,
+        iconSize: [10, 10],
+        iconAnchor: [5, 10],
+      });
+
       L.Icon.Default.mergeOptions({
         iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
         iconUrl:       "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -345,6 +356,7 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
           maxZoom: 19,
         }).addTo(mapInstance.current);
       }
+
       // garante que o group existe
       if (!layerGroup.current) {
         layerGroup.current = L.layerGroup().addTo(mapInstance.current!);
@@ -356,7 +368,7 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
       // adiciona marcadores
       const bounds = L.latLngBounds([]);
       for (const s of stops) {
-        const marker = L.marker([s.latlng.lat, s.latlng.lng]).bindPopup(() => {
+        const marker = L.marker([s.latlng.lat, s.latlng.lng], { icon: smallIcon }).bindPopup(() => {
           const div = document.createElement("div");
           div.style.minWidth = "220px";
           div.innerHTML = `
@@ -682,58 +694,90 @@ export default function HomeClient() {
   const [stops, setStops] = useState<Stop[]>([]);
   const [stopsBusy, setStopsBusy] = useState(false);
 
-  useEffect(() => {
-    let cancel = false;
-    async function buildStops() {
-      if (!selected) { setStops([]); return; }
-      setStopsBusy(true);
+useEffect(() => {
+  const ac = new AbortController();
+  let cancel = false;
 
-      // 1) agrupa por endereço-base
-      const groups = new Map<string, AddressItem[]>();
-      for (const it of selected.addresses) {
-        const base = normalizeBaseAddress(it.address);
-        const arr = groups.get(base) ?? [];
-        arr.push(it);
-        groups.set(base, arr);
-      }
-      const bases = Array.from(groups.keys());
+  function offsetMeters(ll: LatLng, meters: number, angleDeg: number): LatLng {
+    const R = 6371000;
+    const d = meters / R;
+    const ang = (angleDeg * Math.PI) / 180;
+    const lat1 = (ll.lat * Math.PI) / 180;
+    const lon1 = (ll.lng * Math.PI) / 180;
+    const lat2 = Math.asin(
+      Math.sin(lat1) * Math.cos(d) +
+      Math.cos(lat1) * Math.sin(d) * Math.cos(ang)
+    );
+    const lon2 =
+      lon1 +
+      Math.atan2(
+        Math.sin(ang) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+      );
+    return { lat: (lat2 * 180) / Math.PI, lng: (lon2 * 180) / Math.PI };
+  }
 
-      // 2) geocodifica bases únicas (com cache local)
-      const coords = await geocodeMany(bases);
+  async function buildStops() {
+    if (!selected) { setStops([]); return; }
+    setStopsBusy(true);
 
-      // 3) monta pontos com lat/lng (descarta os que não achar)
-      const rawStops: Stop[] = [];
-      for (const base of bases) {
-        const latlng = coords[base];
-        if (!latlng) continue;
-        rawStops.push({
-          base,
-          latlng,
-          count: groups.get(base)!.length,
-          items: groups.get(base)!,
+    // 1) agrupa por endereço-base (logradouro + número, sem complemento)
+    const groups = new Map<string, AddressItem[]>();
+    for (const it of selected.addresses) {
+      const base = normalizeBaseAddress(it.address);
+      const arr = groups.get(base) ?? [];
+      arr.push(it);
+      groups.set(base, arr);
+    }
+    const bases = Array.from(groups.keys());
+
+    // 2) geocodifica bases únicas (com cache local) — com abort
+    const coords = await geocodeMany(bases, ac.signal);
+
+    // 3) monta pontos com lat/lng (um ponto POR base — números diferentes => paradas diferentes)
+    const rawStops: Stop[] = [];
+    for (const base of bases) {
+      const latlng = coords[base];
+      if (!latlng) continue;
+      rawStops.push({
+        base,
+        latlng,
+        count: groups.get(base)!.length,
+        items: groups.get(base)!,
+      });
+    }
+
+    // 4) NÃO consolidar por proximidade.
+    //    Se OSM der o MESMO lat/lng para bases diferentes, espalha ~6m ao redor.
+    const sameCoordMap = new Map<string, Stop[]>();
+    for (const s of rawStops) {
+      const key = `${s.latlng.lat.toFixed(6)},${s.latlng.lng.toFixed(6)}`;
+      const arr = sameCoordMap.get(key) ?? [];
+      arr.push(s);
+      sameCoordMap.set(key, arr);
+    }
+
+    const spreadStops: Stop[] = [];
+    for (const [, arr] of sameCoordMap) {
+      if (arr.length === 1) {
+        spreadStops.push(arr[0]);
+      } else {
+        const radius = 6; // metros
+        arr.forEach((s, i) => {
+          const angle = (360 / arr.length) * i;
+          spreadStops.push({ ...s, latlng: offsetMeters(s.latlng, radius, angle) });
         });
       }
-
-      // 4) consolida por proximidade (~20m)
-      const consolidated: Stop[] = [];
-      const threshold = 20; // metros
-      for (const s of rawStops) {
-        const found = consolidated.find(c => haversineMeters(c.latlng, s.latlng) <= threshold);
-        if (found) {
-          found.count += s.count;
-          found.items.push(...s.items);
-          if (s.items.length > found.items.length) found.base = s.base;
-        } else {
-          consolidated.push({ ...s, items: [...s.items] });
-        }
-      }
-
-      if (!cancel) setStops(consolidated);
-      setStopsBusy(false);
     }
-    buildStops();
-    return () => { cancel = true; };
-  }, [selected]);
+
+    if (!cancel) setStops(spreadStops);
+    setStopsBusy(false);
+  }
+
+  buildStops();
+  return () => { cancel = true; ac.abort(); };
+}, [selected]);
+
 
   /* ============= UI ============= */
   return (
