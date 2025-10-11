@@ -342,6 +342,8 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
 
   useEffect(() => {
     let cancelled = false;
+    let osrmController: AbortController | null = null;
+
     (async () => {
       if (!mapRef.current) return;
       const L = await import("leaflet");
@@ -349,11 +351,7 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
 
       const smallIcon = L.divIcon({
         className: "",
-        html: `<div style="
-          width:10px;height:10px;border-radius:50%;
-          background:#2563eb;border:2px solid #fff;
-          box-shadow:0 0 0 1px rgba(0,0,0,.2)
-        "></div>`,
+        html: `<div style="width:10px;height:10px;border-radius:50%;background:#2563eb;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.2)"></div>`,
         iconSize: [10, 10],
         iconAnchor: [5, 10],
       });
@@ -364,25 +362,19 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
         shadowUrl:     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
       });
 
-      // cria ou reusa o mapa
+      // cria/reusa mapa
       if (!mapInstance.current) {
         const center = stops[0]?.latlng ?? { lat: -22.9068, lng: -43.1729 };
         mapInstance.current = L.map(mapRef.current).setView([center.lat, center.lng], 12);
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "&copy; OpenStreetMap",
-          maxZoom: 19,
+          attribution: "&copy; OpenStreetMap", maxZoom: 19,
         }).addTo(mapInstance.current);
       }
 
-      // garante que o group existe
-      if (!layerGroup.current) {
-        layerGroup.current = L.layerGroup().addTo(mapInstance.current!);
-      }
+      if (!layerGroup.current) layerGroup.current = L.layerGroup().addTo(mapInstance.current!);
+      layerGroup.current.clearLayers();
 
-      // limpa marcadores antigos
-      layerGroup.current?.clearLayers();
-
-      // adiciona marcadores
+      // marcadores
       const bounds = L.latLngBounds([]);
       for (const s of stops) {
         const marker = L.marker([s.latlng.lat, s.latlng.lng], { icon: smallIcon }).bindPopup(() => {
@@ -394,41 +386,83 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
             <ul style="margin-top:8px;">
               ${s.items.slice(0,6).map(it => `<li>${it.stop != null ? `#${it.stop} ` : ""}${it.address}</li>`).join("")}
             </ul>
-            ${s.items.length > 6 ? `<em>…e mais ${s.items.length-6}</em>` : ""}
-          `;
+            ${s.items.length > 6 ? `<em>…e mais ${s.items.length-6}</em>` : ""}`;
           return div;
         });
-
-        layerGroup.current!.addLayer(marker);
+        layerGroup.current.addLayer(marker);
         bounds.extend([s.latlng.lat, s.latlng.lng]);
       }
 
-      // === RASTRO AZUL (polyline) ===
+      // --- helpers de rota (definidas UMA vez)
+      type Coord = { lat: number; lng: number };
+      type RouteCache = Record<string, [number, number][]>; // [lat,lng][]
+
+      const ROUTE_CACHE_KEY = "romaneio:routecache:v1";
+      const loadRouteCache = (): RouteCache => {
+        try { return JSON.parse(localStorage.getItem(ROUTE_CACHE_KEY) || "{}"); } catch { return {}; }
+      };
+      const saveRouteCache = (cache: RouteCache) => {
+        localStorage.setItem(ROUTE_CACHE_KEY, JSON.stringify(cache));
+      };
+      const routeKey = (a: Coord, b: Coord) => {
+        const k = (p: Coord) => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
+        return `${k(a)}->${k(b)}`;
+      };
+      // retorna undefined em caso de falha
+      async function fetchOsrmSegment(a: Coord, b: Coord, signal?: AbortSignal): Promise<[number, number][] | undefined> {
+        const url = `https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`;
+        const res = await fetch(url, { signal });
+        if (!res.ok) return undefined;
+        const j = await res.json();
+        const coords: [number, number][] | undefined = j?.routes?.[0]?.geometry?.coordinates;
+        if (!coords) return undefined;
+        return coords.map(([lng, lat]) => [lat, lng]);
+      }
+
+      // --- rota seguindo ruas (OSRM)
       const ordered = sortStopsForPath(stops);
-      const latlngs = ordered.map(s => [s.latlng.lat, s.latlng.lng]) as [number, number][];
+      const pairs: [Stop, Stop][] = [];
+      for (let i = 0; i < ordered.length - 1; i++) pairs.push([ordered[i], ordered[i+1]]);
 
-      if (latlngs.length >= 2) {
-        // opcional: renderer canvas para performance
+      const routeCache = loadRouteCache();
+      const legsCoords: [number, number][][] = [];
+
+      osrmController = new AbortController();
+      for (const [a, b] of pairs) {
+        const key = routeKey(a.latlng, b.latlng);
+        let seg: [number, number][] | undefined = routeCache[key];
+
+        if (!seg) {
+          seg = await fetchOsrmSegment(a.latlng, b.latlng, osrmController.signal);
+          if (seg) { routeCache[key] = seg; saveRouteCache(routeCache); }
+        }
+
+        // fallback em linha reta
+        legsCoords.push(seg ?? [[a.latlng.lat, a.latlng.lng], [b.latlng.lat, b.latlng.lng]]);
+      }
+
+      // junta as pernas
+      const merged: [number, number][] = [];
+      legsCoords.forEach((seg, idx) => {
+        if (idx === 0) merged.push(...seg);
+        else merged.push(...seg.slice(1));
+      });
+
+      if (merged.length >= 2) {
         const renderer = L.canvas();
-        const path = L.polyline(latlngs, {
-          color: "#2563eb",
-          weight: 4,
-          opacity: 0.9,
-          lineJoin: "round",
-          lineCap: "round",
-          renderer,
+        const path = L.polyline(merged, {
+          color: "#2563eb", weight: 4, opacity: 0.9,
+          lineJoin: "round", lineCap: "round", renderer,
         });
-        layerGroup.current!.addLayer(path);
+        layerGroup.current.addLayer(path);
       }
 
-      if (!cancelled && stops.length > 0) {
-        mapInstance.current.fitBounds(bounds.pad(0.2));
-      }
+      if (!cancelled && stops.length > 0) mapInstance.current!.fitBounds(bounds.pad(0.2));
     })();
 
     return () => {
       cancelled = true;
-      // desmonta o mapa se o componente sair (ex.: fechar modal)
+      osrmController?.abort(); // agora existe no escopo
       if (mapInstance.current) {
         mapInstance.current.remove();
         mapInstance.current = null;
@@ -439,6 +473,7 @@ function InlineRouteMap({ stops }: { stops: Stop[] }) {
 
   return <div ref={mapRef} className="h-[360px] w-full overflow-hidden rounded-xl border" />;
 }
+
 
 /* =========================
    Componente principal
